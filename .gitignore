@@ -35,3 +35,34 @@ msbuild.wrn
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+## Additional entries
+# User Secrets
+**/secrets.json
+*.Development.json
+appsettings.Development.json
+
+# Azure Key Vault
+*.pfx
+*.key
+
+# Environment files
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+
+# IDE-specific files
+.idea/
+*.swp
+*.swo
+*._*
+
+# NuGet
+*.nuget.props
+*.nuget.targets
+
+# User-specific files
+*.rsuser

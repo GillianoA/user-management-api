@@ -4,16 +4,19 @@ A .NET-based REST API for user management with JWT authentication. This API prov
 
 ## Features
 
-- JWT Authentication
-- User CRUD operations
-- Request logging
+- JWT Authentication with comprehensive validation
+- User CRUD operations with input validation
+- Request logging middleware
 - Error handling middleware
 - Input validation
 - Secure endpoints with [Authorize] attribute
+- SQL Server with retry policy
+- User Secrets management
 
 ## Prerequisites
 
 - .NET 9.0 SDK
+- SQL Server instance
 - An API testing tool (e.g., Postman)
 
 ## Installation
@@ -29,7 +32,22 @@ cd UserManagementAPI
 dotnet restore
 ```
 
-3. Run the application:
+3. Set up user secrets:
+```bash
+dotnet user-secrets init
+dotnet user-secrets set "AdminCredentials:Username" "your-admin-username"
+dotnet user-secrets set "AdminCredentials:Password" "your-admin-password"
+dotnet user-secrets set "JwtSettings:SecretKey" "your-secret-key-min-32-chars"
+dotnet user-secrets set "JwtSettings:Issuer" "your-issuer"
+dotnet user-secrets set "JwtSettings:Audience" "your-audience"
+```
+
+4. Configure database connection:
+```bash
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "your-connection-string"
+```
+
+5. Run the application:
 ```bash
 dotnet run
 ```
@@ -114,22 +132,56 @@ The API includes comprehensive error handling:
 - 404 Not Found: Resource not found
 - 500 Internal Server Error: Server-side issues
 
+Error responses include:
+- Error title
+- Detailed message (in development)
+- Timestamp
+- Request path
+
 ## Security
 
 - JWT authentication with configurable settings
 - Password validation
 - Input validation for all endpoints
 - HTTPS support
+- User Secrets for development
+- SQL injection prevention through Entity Framework
+- Retry policies for database connections
+
+## Configuration
+
+### JWT Settings
+- Token expiration: 1 hour
+- Required validations:
+  - Issuer
+  - Audience
+  - Lifetime
+  - Signing key
+
+### Database
+- SQL Server with retry policy:
+  - Max retry count: 5
+  - Max retry delay: 30 seconds
+  - Automatic connection resilience
+
+### Logging
+- Request logging:
+  - Timestamp
+  - HTTP method
+  - Path
+  - Status code
+  - Response time
 
 ## Development
 
 ### Project Structure
 ```
 UserManagementAPI/
-├── Program.cs           # Main application file
-├── UserManagementAPI.csproj
-└── Properties/
-    └── launchSettings.json
+├── Program.cs                 # Main application file
+├── UserManagementAPI.csproj   # Project file
+├── Properties/
+│   └── launchSettings.json    # Launch settings
+└── .gitignore                 # Git ignore rules
 ```
 
 ### Adding New Features
@@ -137,7 +189,8 @@ UserManagementAPI/
 1. Add new endpoints in `Program.cs`
 2. Implement authentication checks using [Authorize] attribute
 3. Include appropriate error handling
-4. Test endpoints using Postman or similar tools
+4. Add input validation
+5. Test endpoints using Postman or similar tools
 
 ## Testing
 
@@ -154,10 +207,32 @@ curl http://localhost:5236/users \
   -H "Authorization: Bearer your-token-here"
 ```
 
-## Configuration
+## Environment Setup
 
-JWT settings in `Program.cs`:
-- Token expiration: 1 hour
-- Issuer: "your-issuer"
-- Audience: "your-audience"
-- Secret key: Must be at least 32 characters
+### Development
+- Use User Secrets for sensitive data
+- Enable detailed error messages
+- Configure CORS if needed
+
+### Production
+- Use appropriate secrets management
+- Disable detailed error messages
+- Configure appropriate logging
+- Set up proper CORS policies
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## Security Considerations
+
+- Keep secrets out of source control
+- Regularly rotate JWT secrets
+- Use strong passwords
+- Monitor logs for suspicious activity
+- Keep dependencies updated
+- Use HTTPS in production
