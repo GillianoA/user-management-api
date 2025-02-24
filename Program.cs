@@ -4,8 +4,22 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Configuration.AddUserSecrets<Program>();
+
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.
+    GetConnectionString("DefaultConnection"),
+    sqlServerOptionsAction: sqlOptions =>
+    {
+        sqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 5,
+            maxRetryDelay: TimeSpan.FromSeconds(30),
+            errorNumbersToAdd: null);
+    }));
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -16,9 +30,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = "your-issuer",
-            ValidAudience = "your-audience",
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("your-super-secret-key-with-at-least-32-characters"))
+            ValidIssuer = builder.Configuration["JwtSettings:Issuer"],
+            ValidAudience = builder.Configuration["JwtSettings:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["JwtSettings:SecretKey"] ?? throw new InvalidOperationException("JWT SecretKey is not configured")))
         };
     });
 
@@ -77,16 +91,20 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-var users = new List<User>(){
-    new User { Id = 1, Name = "Wes", Email = "wes@example.com", Department = "Engineering" },
-    new User { Id = 2, Name = "John", Email = "john@example.com", Department = "Marketing" },
-    new User { Id = 3, Name = "Jane", Email = "jane@example.com", Department = "HR" },
-};
-
 //Login endpoint
-app.MapPost("/login", (LoginRequest login) => {
-    //DO not do this in production(Ive seen it before, looking at you bob pass)
-    if (login.Username == "admin" && login.password == "password") {
+app.MapPost("/login", (LoginRequest login, IConfiguration configuration) => {
+    var adminUsername = configuration ["AdminCredentials:Username"];
+    var adminPassword = configuration ["AdminCredentials:Password"];
+
+    if(string.IsNullOrEmpty(adminUsername) || string.IsNullOrEmpty(adminPassword)) {
+        return Results.Problem(
+            title: "Internal Server Error",
+            detail: "Admin credentials not configured",
+            statusCode: 500
+        );
+    }
+
+    if (login.Username == adminUsername && login.password == adminPassword) {
         var token = GenerateJwtToken(login.Username);
         return Results.Ok(new { token });
     } else {
@@ -95,28 +113,29 @@ app.MapPost("/login", (LoginRequest login) => {
 });
 
 //Basic CRUD Endpoints
-app.MapGet("/users", [Authorize] () =>
-{
+app.MapGet("/users", [Authorize] async (ApplicationDbContext db) => {   
+    var users = await db.Users.ToListAsync();
     if (!users.Any()) 
         return Results.NotFound(new { error = "No users found" });
     
     return Results.Ok(users);
 });
 
-app.MapGet("/users/{id}", [Authorize] (int id) =>
-{
+app.MapGet("/users/{id}", [Authorize] async (int id, ApplicationDbContext db) => {
     if (id <= 0) 
         return Results.BadRequest(new { error = "Invalid user id" });
     
-    var user = users.FirstOrDefault(u => u.Id == id);
+    var user = await db.Users.FindAsync(id);
     if (user == null) 
         return Results.NotFound(new { error = $"User {id} not found" });
     
     return Results.Ok(user);
 });
 
-app.MapPost("/users", [Authorize](User user) =>
-{
+app.MapPost("/users", [Authorize] async(User user, ApplicationDbContext db) => {
+    if(await db.Users.AnyAsync(u => u.Name == user.Name))
+        return Results.BadRequest(new { error = "User already exists" });
+
     if (user == null) 
         return Results.BadRequest(new { error = "User data is required" });
 
@@ -135,19 +154,21 @@ app.MapPost("/users", [Authorize](User user) =>
     if (user.Name.Length < 2) 
         return Results.BadRequest(new { error = "Name must be at least 2 characters" });
 
-    user.Id = users.Any() ? users.Max(u => u.Id) + 1 : 1;
-    users.Add(user);
+    user.CreatedAt = DateTime.UtcNow;
+
+    db.Users.Add(user);
+    await db.SaveChangesAsync();
 
     return Results.Created($"/users/{user.Id}", user);
 });
 
-app.MapPut("/users/{id}", [Authorize] (int id, User user) => {
+app.MapPut("/users/{id}", [Authorize] async (int id, User user, ApplicationDbContext db) => {
     try {
         if (id <= 0) return Results.BadRequest("Invalid user id");
 
         if (user == null) return Results.BadRequest("User data is required");
 
-        var userToUpdate = users.FirstOrDefault(u => u.Id == id);
+        var userToUpdate = await db.Users.FindAsync(id);
 
         if (userToUpdate == null) return Results.NotFound("User not found");
 
@@ -160,8 +181,10 @@ app.MapPut("/users/{id}", [Authorize] (int id, User user) => {
         userToUpdate.Name = user.Name;
         userToUpdate.Email = user.Email;
         userToUpdate.Department = user.Department;
+
+        await db.SaveChangesAsync();
         return Results.Ok(userToUpdate);
-    } catch (Exception ex) {
+    } catch {
         return Results.Problem(
             title: "Internal Server Error",
             detail: "An error occurred while updating a user",
@@ -171,17 +194,18 @@ app.MapPut("/users/{id}", [Authorize] (int id, User user) => {
     
 });
 
-app.MapDelete("/users/{id}", [Authorize] (int id) => {
+app.MapDelete("/users/{id}", [Authorize] async (int id, ApplicationDbContext db) => {
     try{
         if (id <= 0) return Results.BadRequest("Invalid user id");
 
-        var userToDelete = users.FirstOrDefault(u => u.Id == id);
+        var userToDelete = await db.Users.FindAsync(id);
 
         if (userToDelete == null) return Results.NotFound($"User {id} not found"); 
 
-        users.Remove(userToDelete);    
+        db.Users.Remove(userToDelete);
+        await db.SaveChangesAsync();    
         return Results.Ok(userToDelete);
-    } catch (Exception ex) {
+    } catch {
         return Results.Problem(
             title: "Internal Server Error",
             detail: "An error occurred while deleting a user",
@@ -191,12 +215,21 @@ app.MapDelete("/users/{id}", [Authorize] (int id) => {
 });
 
 string GenerateJwtToken(string username) {
-    var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("your-super-secret-key-with-at-least-32-characters"));
+    var JwtSettings = builder.Configuration.GetSection("JwtSettings");
+    var secretKey = JwtSettings["SecretKey"];
+    var issuer = JwtSettings["Issuer"];
+    var audience = JwtSettings["Audience"];
+
+    if(string.IsNullOrEmpty(secretKey) || string.IsNullOrEmpty(issuer) || string.IsNullOrEmpty(audience)) {
+        throw new InvalidOperationException("JWT configuration is not complete");
+    }
+
+    var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
     var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
 
     var token = new JwtSecurityToken(
-        issuer: "your-issuer",
-        audience: "your-audience",
+        issuer: issuer,
+        audience: audience,
         claims: new[] {
             new Claim(ClaimTypes.Name, username)
         },
@@ -208,15 +241,7 @@ string GenerateJwtToken(string username) {
 }
 
 app.Run();
-public class User
-{
-    public int Id { get; set; }
-    public string Name { get; set; }
-    public string Email { get; set; }
-    public string Department { get; set; }
-}
-
 public class LoginRequest {
-    public string Username { get; set; }
-    public string password { get; set; }
+    public required string Username { get; set; }
+    public required string password { get; set; }
 }
