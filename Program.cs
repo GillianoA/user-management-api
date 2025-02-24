@@ -85,6 +85,7 @@ var users = new List<User>(){
 
 //Login endpoint
 app.MapPost("/login", (LoginRequest login) => {
+    //DO not do this in production(Ive seen it before, looking at you bob pass)
     if (login.Username == "admin" && login.password == "password") {
         var token = GenerateJwtToken(login.Username);
         return Results.Ok(new { token });
